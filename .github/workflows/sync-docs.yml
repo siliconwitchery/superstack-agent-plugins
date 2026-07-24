@@ -21,12 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: claude-plugins
 
       - name: Checkout the docs repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: siliconwitchery/docs
           path: docs
@@ -36,9 +36,9 @@ jobs:
         run: python3 scripts/generate-references.py --docs ../docs --write
 
       - name: Open pull request if references changed
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
-          # PAT or GitHub App token — PRs opened with the default GITHUB_TOKEN never trigger validate.yml
+          # PAT or GitHub App token. PRs opened with the default GITHUB_TOKEN never trigger validate.yml
           token: ${{ secrets.SYNC_PR_TOKEN }}
           path: claude-plugins
           branch: sync-docs-references
@@ -49,5 +49,5 @@ jobs:
             latest siliconwitchery/docs content via
             `scripts/generate-references.py --write`.
 
-            Review the diff before merging — do not auto-merge.
+            Review the diff before merging. Do not auto-merge.
           delete-branch: true

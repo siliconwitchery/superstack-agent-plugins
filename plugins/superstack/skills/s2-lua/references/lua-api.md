@@ -78,10 +78,9 @@ The device runs **Lua 5.5**. Most of the standard Lua libraries that you would f
 
 The remaining standard libraries are not included, as they are superseded by similar functionality provided by the device specific libraries:
 
-- ❎ Debug library
-
 - ❎ File IO functions - Replaced by the [file storage](#file-storage) library
 - ❎ Operating system functions - Replaced by the [timekeeping](#timekeeping) and [device information](#device-information) libraries
+- ❎ Debug library
 
 ---
 

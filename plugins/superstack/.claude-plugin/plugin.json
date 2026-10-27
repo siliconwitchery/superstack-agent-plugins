@@ -1,14 +1,14 @@
 {
   "name": "superstack",
   "version": "0.1.0",
-  "description": "Write Lua for the Silicon Witchery S2 Module and integrate with the Superstack IoT platform REST API.",
+  "description": "Write Lua for the S2 Module and drive Superstack from your agent: pair devices, upload code, read logs, manage fleets and credit, and message devices from your own project.",
   "author": {
     "name": "Silicon Witchery",
     "email": "info@siliconwitchery.com",
     "url": "https://www.siliconwitchery.com"
   },
   "homepage": "https://docs.siliconwitchery.com",
-  "repository": "https://github.com/siliconwitchery/claude-plugins",
+  "repository": "https://github.com/siliconwitchery/superstack-agent-plugins",
   "license": "Apache-2.0",
   "keywords": ["iot", "embedded", "lua", "lte", "s2-module", "superstack", "nrf9151"]
 }

@@ -6,14 +6,14 @@
     "url": "https://www.siliconwitchery.com"
   },
   "metadata": {
-    "description": "Agent Skills and Claude Code plugins for Silicon Witchery products",
+    "description": "Agent plugins for Silicon Witchery products",
     "version": "0.1.0"
   },
   "plugins": [
     {
       "name": "superstack",
       "source": "./plugins/superstack",
-      "description": "Write Lua for the S2 Module and integrate with the Superstack IoT platform. Covers device code (sensors, I2C/SPI/UART, GPS, power) and the Superstack REST API.",
+      "description": "Write Lua for the S2 Module and drive Superstack from your agent: pair devices, upload code, read logs, manage fleets and credit, and message devices from your own project.",
       "version": "0.1.0",
       "license": "Apache-2.0",
       "homepage": "https://docs.siliconwitchery.com",

@@ -1,6 +1,6 @@
 # Writing sensor drivers from a datasheet
 
-How to turn an I2C or SPI sensor datasheet into a working S2 Module Lua driver. Every API call below exists verbatim in the Superstack Lua Library Reference — do not invent functions, options, or return fields beyond these.
+How to turn an I2C or SPI sensor datasheet into a working S2 Module Lua driver. Use only the functions, options and return fields shown here or in `lua-api.md`. Do not invent others.
 
 ## Hardware facts you must respect
 
@@ -10,7 +10,7 @@ How to turn an I2C or SPI sensor datasheet into a working S2 Module Lua driver. 
 - **Power:** VOUT1 feeds ports A/B/C; VOUT2 feeds D/E/F. Both rails always track the same voltage. `device.power.set_vout(v)` sets ALL ports at once, 1.8–3.3 V in 0.1 V steps, 100 mA per rail. **The rails boot live at 1.8 V** — a 3.3 V sensor on an unconfigured port half-works with marginal I2C signaling rather than failing cleanly, so always `device.power.set_vout(3.3)` before first sensor contact.
 - **`device.sleep(t)` takes SECONDS** (e.g. `device.sleep(0.01)` = 10 ms). Datasheet conversion times are usually in ms — divide by 1000.
 - **I2C return values differ by call.** `read` and `write_read` return `{ success, data, value }`; `write` returns `{ success }` only (no `data`/`value`); `scan` returns `nil` — its results appear in the logs, so there's nothing to check. Always check `.success` after `read`, `write_read`, and `write`. SPI, UART, analog, and digital calls have **no** success flag — validate SPI sensors by reading a known ID register instead.
-- No `io`, `os`, or `debug` in the sandbox (a minimal undocumented `require` exists but re-executes modules on every call — prefer single-file drivers). The script restarts from the top on every code push, save, or reboot, so init sequences must be idempotent.
+- No `io`, `os`, `debug` or `package`. A driver can live in its own bundle file, loaded with `require("name")`, which runs the file again on every call, so require it once. Code starts from the top of `main.lua` on new code, a restart or a reboot, so setup sequences must be idempotent.
 
 ## The methodology
 
@@ -35,7 +35,7 @@ if result.success then
 end
 ```
 
-`write_read` performs the register-pointer write and the read as one transaction. Some sensors (e.g. VCNL4040) misbehave with a repeated start; for those, split it into `device.i2c.write(addr, "\x09", {...})` followed by `device.i2c.read(addr, 2, {...})`, checking `.success` on both.
+`write_read` performs the register-pointer write, a stop, then the read. It never uses a repeated start, so it also suits sensors such as the VCNL4040 that misbehave with one. A sensor that needs a repeated start between the write and the read is not supported.
 
 For command-based sensors (Sensirion style), write the command, wait the datasheet conversion time with `device.sleep`, then read:
 
@@ -117,7 +117,7 @@ local ok = crc8(d, 1, 2) == string.byte(d, 3) and crc8(d, 4, 5) == string.byte(d
 
 - Power the rail first, then wait for it to settle: `device.power.set_vout(3.3)` then `device.sleep(0.1)`.
 - Probe a chip-ID / manufacturer-ID register before configuring anything, and `error()` with a helpful message if it's wrong — this catches wiring and address mistakes immediately in the Superstack logs.
-- Send the datasheet soft-reset command if the sensor has one, then wait the documented startup time. Remember the script re-runs from the top on every push, so the sensor may already be configured — resets make re-runs deterministic.
+- Send the datasheet soft-reset command if the sensor has one, then wait the documented startup time. Remember the code re-runs from the top whenever new code arrives, so the sensor may already be configured — resets make re-runs deterministic.
 - All delays go through `device.sleep(seconds)`. A "10 ms conversion time" is `device.sleep(0.01)`, not `device.sleep(10)`.
 
 ---
@@ -193,10 +193,7 @@ while true do
     local temperature, humidity = sht45_measure()
 
     if temperature then
-        network.send_data {
-            temperature_celsius = temperature,
-            humidity_percent = humidity
-        }
+        print(string.format("%.2f C, %.1f %%RH", temperature, humidity))
     else
         print("SHT45 read failed (bus error or CRC mismatch)")
     end
@@ -256,7 +253,7 @@ while true do
     local temperature = mcp9808_measure()
 
     if temperature then
-        network.send_data { temperature_celsius = temperature }
+        print(string.format("%.3f C", temperature))
     else
         print("MCP9808 read failed")
     end
@@ -360,10 +357,7 @@ while true do
 
         local temperature, pressure = compensate(adc_T, adc_P)
 
-        network.send_data {
-            temperature_celsius = temperature,
-            pressure_hpa = pressure
-        }
+        print(string.format("%.2f C, %.2f hPa", temperature, pressure))
     else
         print("BMP280 read failed")
     end

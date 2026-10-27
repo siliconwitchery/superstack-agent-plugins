@@ -1,34 +1,39 @@
-# S2 Lua — Footguns, Quirks & Recovery Recipes
+# S2 Lua: traps, quirks and recovery recipes
 
-Verified behaviors that commonly produce broken-looking code or "bricked-looking"
-devices. Every item here is confirmed against the official docs or hardware
-specs; a final section lists things that are *not* documented, with the safe
-conservative assumption to code against.
+Behaviour that commonly produces broken-looking code or a device that looks
+bricked. Each item is checked against the firmware source or the S2 datasheet.
 
 ## Contents
 
 - [Time is in milliseconds; sleep is in seconds](#time-is-in-milliseconds-sleep-is-in-seconds)
-- [The PSM / GPS trap](#the-psm--gps-trap)
+- [The PSM and GPS trap](#the-psm-and-gps-trap)
 - [GPS acquisition vs network activity](#gps-acquisition-vs-network-activity)
-- [Everything you send costs data allowance](#everything-you-send-costs-data-allowance)
+- [User data spends credit](#user-data-spends-credit)
+- [Network calls](#network-calls)
+- [Messages from the user's project](#messages-from-the-users-project)
 - [Error handling differs per bus](#error-handling-differs-per-bus)
-- [There is no downlink channel](#there-is-no-downlink-channel)
-- [Store-and-forward pattern](#store-and-forward-pattern)
+- [Handlers cannot yield, and their errors crash the code](#handlers-cannot-yield-and-their-errors-crash-the-code)
+- [Temporary files die with the run](#temporary-files-die-with-the-run)
+- [Retry pattern for a dropped connection](#retry-pattern-for-a-dropped-connection)
 - [Battery charger voltage list has a gap](#battery-charger-voltage-list-has-a-gap)
 - [Ports boot at 1.8 V; VOUT applies to all ports at once](#ports-boot-at-18-v-vout-applies-to-all-ports-at-once)
+- [Some settings outlive the run](#some-settings-outlive-the-run)
 - [JTAG erase permanently destroys the module's identity](#jtag-erase-permanently-destroys-the-modules-identity)
 - [LED states worth knowing when debugging](#led-states-worth-knowing-when-debugging)
-- [Confirmed runtime behavior](#confirmed-runtime-behavior)
-- [Known firmware issues (v2.0.2)](#known-firmware-issues-v202)
+- [Confirmed runtime behaviour](#confirmed-runtime-behaviour)
 
 ## Time is in milliseconds; sleep is in seconds
 
-The two time-related units are different and this is the most common bug:
+The two time units differ, and mixing them is the most common bug:
 
-- `time.get_unix_time()` returns **milliseconds** since the Unix epoch — and
-  before the first network time sync it returns **device uptime in
-  milliseconds** instead, not wall-clock time.
-- `device.sleep(t)` takes **seconds** (fractions allowed, e.g. `1.5`).
+- `time.get_unix_time()` returns **milliseconds** since the Unix epoch. Before
+  the first network time sync it returns **device uptime in milliseconds**.
+- `time.get_time_date{ unix_epoch = ms }` also takes **milliseconds**, and
+  raises `current time unknown` before the first sync when `unix_epoch` is
+  left out.
+- `device.sleep(t)` takes **seconds**, with fractions allowed, such as `1.5`.
+- `device.sleep_ms(ms)` takes 0 to 1000 milliseconds, and event handlers wait
+  until it returns.
 
 ```lua
 -- WRONG: waits 30 milliseconds, not 30 seconds
@@ -40,12 +45,8 @@ local t = time.get_unix_time()
 while t + 30000 > time.get_unix_time() do ... end
 ```
 
-(The official docs' own example for `time.get_unix_time()` currently contains
-the wrong version above — do not copy it.)
-
-**Wait-for-valid-time idiom** — before timestamping logged data, make sure the
-clock is synced, not uptime. A freshly booted device that hasn't synced returns
-values near zero (uptime), so a plausibility threshold works:
+**Wait for valid time** before timestamping data. A device that hasn't synced
+returns uptime, which is near zero, so a threshold works:
 
 ```lua
 -- Unix ms for 2024-01-01; anything below this is uptime, not wall time
@@ -58,74 +59,142 @@ local function wait_for_valid_time()
 end
 ```
 
-## The PSM / GPS trap
+## The PSM and GPS trap
 
-Symptom: *"my device ignores code updates / seems bricked after I enabled GPS."*
+Symptom: *"my device ignores code updates, or seems bricked, after I enabled
+GPS."*
 
-Cause chain:
+Cause:
 
-1. `location.enable{}` **silently activates PSM** (LTE Power Saving Mode) so the
-   modem can share hardware with the GPS receiver. `network.low_power_mode(true)`
-   activates PSM explicitly.
-2. Under PSM, code pushes from Superstack take up to **15 minutes** to reach the
-   device (they arrive at the next modem wake), instead of seconds.
-3. `location.disable()` alone does **not** deactivate PSM.
+1. `location.enable{}` **turns on PSM** (LTE Power Saving Mode), because GPS
+   only runs while LTE sleeps. `network.low_power_mode(true)` turns it on
+   explicitly.
+2. Under PSM, the device picks up new code, start and stop requests, and
+   messages only at its next check-in, up to **15 minutes** away, instead of
+   within seconds.
+3. `location.disable()` does **not** turn PSM off.
+4. PSM stays on after new code replaces the old, until
+   `network.low_power_mode(false)` or a reboot. Code that calls
+   `location.enable` turns it on again at the next start.
 
-Full recovery recipe (restore real-time code updates):
+Recovery, to get responsive updates back:
 
 ```lua
 location.disable()
 network.low_power_mode(false)
--- then wait up to 15 minutes for the modem to re-register.
 ```
 
-Note the recovery code itself is delivered as a code push — so it may take up to
-15 minutes to land on a PSM-active device. The device is not bricked; it is
-sleeping. Never suggest re-flashing firmware for this (see JTAG section).
+This recovery code is itself an upload, so it can take up to 15 minutes to
+land on a device in PSM. The device is not bricked. It is sleeping. Never
+suggest re-flashing firmware for this (see the JTAG section).
 
-Preventive guidance for generated code: if the application needs responsive
-remote development, avoid `location.enable` / `low_power_mode(true)` during the
-iteration phase; add them once the code is stable and field-deployed.
+In generated code, avoid `location.enable` and `low_power_mode(true)` while
+the user is iterating. Add them once the code is stable and in the field.
 
 ## GPS acquisition vs network activity
 
-While waiting for a GPS fix, avoid `print()` and `network.send_data` — network
-activity competes for the shared modem hardware and delays acquisition. Enable
-GPS, sleep, then read `location.get_latest()` and check its `valid` flag before
-using coordinates. Time to first fix ranges 1.3 s to 30.5 s with sky view.
+GPS and LTE share the radio. While waiting for a fix, avoid network calls,
+because they delay acquisition. Enable GPS, sleep, then read
+`location.get_latest()` and check `valid` before using the coordinates. When
+the fix is lost, `valid` is `false` but the coordinates still hold the last
+good fix. Time to first fix ranges from 1.3 s to 30.5 s with a clear view of
+the sky.
 
-## Everything you send costs data allowance
+`location.enable()` without a table raises. Pass `location.enable{}`.
 
-Counted against the deployment's monthly data allowance:
+## User data spends credit
 
-- every `print()` log
-- every `network.send_data{}` payload
-- **every code push — the entire code file is retransmitted to every target
-  device.** Pushing a 50 kB file to 20 devices costs ~1 MB.
+Credit costs €1 per MB of user data, counted on the data itself. User data is:
 
-Not counted: automatic firmware updates, and platform telemetry (power, location,
-usage) viewed in Superstack.
+- every log, which includes every `print()`
+- every network call and its response
+- every message from the user's project
+- every upload, which sends only the files that changed, to every target
+  device
 
-Consequences for generated code:
+Managing the device is free: check-ins, pairing, unpairing, starting,
+stopping, restarting and firmware updates.
 
-- no `print()` in tight loops; remove debug prints before fleet deployment
-- batch readings and send one table instead of many small sends
-- keep JSON keys descriptive but not verbose (keys are payload too — see
-  agent-tuning guidance in the superstack-api skill: descriptive keys feed the
-  AI agent's schema inference)
-- reference scale: one temperature value every 15 minutes ≈ 0.5 MB/month, and
-  the Free tier includes 1 MB/month
+So in generated code:
+
+- no `print()` in tight loops, and remove debug prints before a fleet upload
+- batch readings into one network call instead of many small ones
+- one 100-byte reading every 15 minutes is about 0.3 MB a month, or €0.30
+
+A fleet with no credit sends no logs, and its network calls return
+`nil, "no credit"` at once without raising. Lua keeps running.
+
+## Network calls
+
+`network.get/delete(url, options)` and `network.post/put/patch(url, body,
+options)` make a REST request through Superstack to any public HTTPS or HTTP
+address.
+
+- Without `callback`, the call blocks and returns `response, error`. With
+  `options.callback = function(response, error)`, it returns at once and the
+  callback receives the result.
+- `response` is `{ status = 200, content = "..." }`. A 404 or 500 is a
+  response, not an error.
+- `error` is one of `no network`, `timeout`, `connection failed`, `too large`
+  or `no credit`. Always handle it.
+- **One request can wait at a time.** A second call while one waits, with or
+  without a callback, raises `too many network requests are waiting`.
+- The body is at most 4096 bytes, otherwise the call raises. The URL and
+  headers fit in about 980 bytes beside a 4096-byte body.
+- A response longer than 4096 bytes returns `too large` instead of the
+  content.
+- The outside service has 8 seconds to answer.
+- Private, loopback and link-local addresses are refused with
+  `connection failed`, so the device cannot reach a server on the user's LAN.
+- Encode tables with the built-in `json.encode` and set the header:
+
+```lua
+local response, err = network.post(
+    "https://example.com/readings",
+    json.encode{ temperature_c = 21.4 },
+    { headers = { ["Content-Type"] = "application/json" } }
+)
+if err then
+    print("send failed: " .. err)
+elseif response.status >= 300 then
+    print("server answered " .. response.status)
+end
+```
+
+## Messages from the user's project
+
+The user's own software can send a message to a device with a fleet key (see
+the `superstack-cli` skill). Lua receives it through a handler:
+
+```lua
+network.assign_message_event(function(content)
+    local message = json.decode(content)
+    if message.interval_s then
+        interval_s = message.interval_s
+    end
+end)
+```
+
+- `content` holds exactly the bytes the user sent, up to 4096.
+- A message that arrives while no handler is assigned, or while Lua is
+  stopped, is discarded.
+- The device receives messages at its check-ins. Under PSM that can be 15
+  minutes away, and a message expires after 1 hour unless the sender sets
+  `expires_in`.
+
+Use this for remote configuration instead of uploading new code.
 
 ## Error handling differs per bus
 
 | API | Failure surface |
 |---|---|
-| `device.i2c.read/write/write_read` | returns a table with a `success` boolean — **always check it** |
-| `device.spi.*`, `device.uart.*`, `device.analog.*`, `device.digital.*` | no success flag — invalid arguments raise errors |
-| `device.i2c.scan` | returns nil; results appear in the logs |
+| `device.i2c.read/write/write_read` | returns a table with a `success` boolean. **Always check it** |
+| `device.spi.*`, `device.uart.*`, `device.analog.*`, `device.digital.*` | no success flag. Bad arguments and failures raise |
+| `device.i2c.scan` | returns nil. Each result line is a separate log |
+| network calls | return `response, error`. Bad URLs, headers and oversized bodies raise |
 
-Wrap fragile sections (sensor init, bus transactions with possibly-absent
-devices) in `pcall` so one failed transaction doesn't kill the whole script:
+Wrap fragile sections, such as sensor setup or a device that might be absent,
+in `pcall`, so one failure doesn't crash the code:
 
 ```lua
 local ok, err = pcall(function()
@@ -139,134 +208,161 @@ if not ok then
 end
 ```
 
-## There is no downlink channel
+`pcall` cannot catch a stop. `superstack device stop` always ends the code.
 
-There is no MQTT, no `network.receive()`, no webhooks to the device, no remote
-function calls, and no per-device config API. Do not invent one. The two
-sanctioned patterns:
+## Handlers cannot yield, and their errors crash the code
 
-1. **Config as constants + re-push** — put tunables at the top of the file as
-   named constants; changing a threshold means editing and re-pushing the code
-   (remember the data cost × fleet size).
-2. **Stop/start as a remote kill switch** — the REST API can stop and start a
-   device's code remotely (see the superstack-api skill).
+This applies to `device.digital.assign_input_event`,
+`device.uart.assign_read_event`, network callbacks and
+`network.assign_message_event`:
 
-## Store-and-forward pattern
+- A handler runs between instructions of the main code and during
+  `device.sleep`, then the main code resumes.
+- A handler that yields raises an error.
+- An error inside a handler crashes the whole program. Wrap handler bodies in
+  `pcall` when they parse input from outside, such as a message.
+- Any other digital or analog use of a pin cancels its input event.
 
-**Confirmed: `network.send_data` while offline drops the data** — there is no
-firmware-side buffering. For field deployments, anything that must survive a
-connectivity gap needs to be gated on `network.connected()` and buffered to
-flash:
+## Temporary files die with the run
+
+`storage.open()` creates a temporary file and returns its handle. There are no
+named files.
+
+- `handle:write(data)` replaces the contents. `handle:append(data)` adds to
+  them.
+- `handle:read()` with no options returns **line 1 only**. Use
+  `handle:read{ line = n }` for line `n` (negative counts from the end), or
+  `handle:read{ length = n, offset = o }` for bytes.
+- `handle:close()` deletes the file.
+- **Every temporary file is deleted when the code starts, stops, restarts or
+  crashes, when new code arrives, and at reboot.** Nothing survives the run
+  that created it.
+- Storage is shared with the code bundle. A write that does not fit raises
+  `there is not enough storage`.
+
+Code files in the bundle are read-only. Load one with `require("name")`, which
+runs `name.lua` and returns its first value. `require` has no cache and runs
+the file again on every call, and the name is a path: `require("lib/sensor")`
+loads `lib/sensor.lua`.
+
+## Retry pattern for a dropped connection
+
+Network calls fail with `no network` while the device is out of coverage.
+Keep unsent readings in a temporary file and send them when the connection
+returns. The backlog lives only as long as the run.
 
 ```lua
-local BUFFER_FILE = "backlog.txt"
+local backlog = storage.open()
+local backlog_lines = 0
 
-local function record(json_ready_table)
-    if network.connected() then
-        -- drain any backlog first
-        local backlog = storage.read(BUFFER_FILE)
-        if backlog and #backlog > 0 then
-            for line in backlog:gmatch("[^\n]+") do
-                network.send_data{ raw = line }
-            end
-            storage.delete(BUFFER_FILE)
+local function send(reading)
+    local line = json.encode(reading)
+    local response, err = network.post(URL, line,
+        { headers = { ["Content-Type"] = "application/json" } })
+    if err then
+        backlog:append(line .. "\n")
+        backlog_lines = backlog_lines + 1
+        return false
+    end
+    return true
+end
+
+local function drain()
+    while backlog_lines > 0 do
+        local line = backlog:read{ line = 1 }
+        local response, err = network.post(URL, line,
+            { headers = { ["Content-Type"] = "application/json" } })
+        if err then
+            return
         end
-        network.send_data(json_ready_table)
-    else
-        -- store a compact representation for later
-        storage.append(BUFFER_FILE, encode_line(json_ready_table) .. "\n")
+        local rest = backlog:read{ length = math.maxinteger, offset = #line + 1 }
+        backlog:write(rest or "")
+        backlog_lines = backlog_lines - 1
     end
 end
 ```
 
-(Adapt `encode_line` per application; keep buffered lines compact — flash
-storage is limited.)
-
 ## Battery charger voltage list has a gap
 
-`device.power.battery.set_charger_cv_cc(voltage, current)` accepts **only** these
-termination voltages:
+`device.power.battery.set_charger_cv_cc(voltage, current)` accepts **only**
+these termination voltages:
 
 ```
 3.50 3.55 3.60 3.65 4.00 4.05 4.10 4.15 4.20 4.25 4.30 4.35 4.40 4.45
 ```
 
-There are no valid values between 3.65 and 4.00 — e.g. `3.7`, `3.8`, `3.85` are
-invalid despite being common LiFePO4/NiMH-ish numbers. Current: 32–800 mA in
-2 mA steps. Standard single-cell Li-Po → `set_charger_cv_cc(4.2, C/1)` where the
-current matches the cell's rated charge current (e.g. 200 for a 200 mAh cell at
-1C).
+There are no valid values between 3.65 and 4.00, so `3.7`, `3.8` and `3.85`
+raise. Current is an integer from 32 to 800 mA in 2 mA steps. For a standard
+single-cell LiPo use `set_charger_cv_cc(4.2, C)`, where `C` is the cell's
+rated charge current, such as 200 for a 200 mAh cell at 1C.
+
+The firmware programs 3.50 V and 32 mA at every boot, so set the charger in
+setup.
 
 ## Ports boot at 1.8 V; VOUT applies to all ports at once
 
-**At boot the port rails are live at 1.8 V** (confirmed by Silicon Witchery).
-This is a trap: a 3.3 V sensor on an unconfigured port doesn't fail cleanly —
-it may half-work, with marginal I2C signaling and garbage readings. Always call
-`device.power.set_vout(3.3)` in setup before talking to 3.3 V sensors.
+**At boot the port rails are live at 1.8 V.** A 3.3 V sensor on an
+unconfigured port doesn't fail cleanly. It may half-work, with marginal I2C
+signalling and garbage readings. Call `device.power.set_vout(3.3)` in setup
+before talking to 3.3 V sensors.
 
-`device.power.set_vout(voltage)` sets the IO voltage for **all** ports PORTA–F
-together (1.8–3.3 V, 0.1 V steps). You cannot run PORTA at 1.8 V and PORTD at
-3.3 V. Mixed-voltage sensor sets need external level shifting or the 5 V VSYS
-rail plus regulators.
+`device.power.set_vout(voltage)` sets **all** ports, PORTA to PORTF, together:
+1.8 to 3.3 V in 0.1 V steps, or `0` to switch port power off. You cannot run
+PORTA at 1.8 V and PORTD at 3.3 V. Mixed-voltage sensors need level shifting,
+or the 5 V VSYS rail with their own regulators.
+
+## Some settings outlive the run
+
+A restart of Lua, including new code arriving, does **not** reset:
+
+- PSM, set by `location.enable` or `network.low_power_mode`
+- the VOUT voltage
+- the charger settings
+- the level of a pin driven with `set_output`, until the new code uses the pin
+
+A reboot resets them all. Set each one explicitly in setup rather than relying
+on its current value.
 
 ## JTAG erase permanently destroys the module's identity
 
-The S2 can technically be erased over Tag-Connect/J-Link and loaded with custom
-firmware — but this **permanently erases the SoftSIM, the data plan, and the
-Superstack license**. The module can never be used with Superstack again.
+The S2 can be erased over Tag-Connect and J-Link and loaded with custom
+firmware, but this **permanently erases the SoftSIM, the data plan and the
+module's Superstack identity**. The module can never be used with Superstack
+again.
 
 Never suggest re-flashing, factory reset, or "erase and reprogram" as a
-troubleshooting step. There is no user-facing factory reset. For a device that
-seems unresponsive to code pushes, see the PSM trap above; for pairing issues,
-un-pair/re-pair from Superstack (requires access to the owning deployment).
+troubleshooting step. For a device that ignores uploads, see the PSM trap
+above. For pairing problems, unpair it and pair it again with the CLI, which
+needs access to its fleet.
 
 ## LED states worth knowing when debugging
 
 | Observation | Meaning |
 |---|---|
-| Network LED strobing rapidly | **Firmware update in progress (~5 min). Do not power off** — power loss restarts the update. May go dark near the end; wait it out. |
-| Network LED off | Connected & idle — this is normal operation, not a fault |
-| Network LED slow blink | Searching for LTE — check antenna clearance, band coverage for the country |
-| Network LED solid | Network found but not paired to a deployment |
+| Network LED strobing rapidly | Firmware update in progress. Leave it powered and wait it out |
+| Network LED off, with brief flashes | Paired and connected. This is normal operation |
+| Network LED slow blink | Searching for LTE. Check antenna clearance and coverage for the country |
+| Network LED solid | Connected but not paired with a fleet |
 | Power LED short blinks | On battery, no external power |
 
-## Confirmed runtime behavior
+## Confirmed runtime behaviour
 
-Verified against the firmware source (v2.0.2, July 2026):
+Checked against firmware 3.0.0:
 
-| Behavior | Fact |
+| Behaviour | Fact |
 |---|---|
-| Lua version | **5.5** (`_VERSION` reports "Lua 5.5"). Opened libraries: base, coroutine, table, string, math, utf8. **No `io`, `os`, or `debug`** |
-| `require` | A minimal `require("name")` **exists but is undocumented**: it loads `name.lua` from device storage and **re-executes the module on every call** (no `package.loaded` caching). Default to single-file programs; if used, guard against repeated execution |
-| `network.send_data` while offline | **Data is dropped silently** — no firmware buffering, no error return. Use the store-and-forward pattern above for anything that must survive connectivity gaps |
-| `send_data` limits | Whole encoded message ≈ 1 KB — **keep user payloads under ~900 bytes** and split larger data. Errors on empty tables and non-string top-level keys (array-style `send_data{1,2,3}` fails). Synchronous: can block up to ~5 s on a poor connection |
-| Data-allowance blocking | Once the deployment's data allowance is exceeded, `send_data` **and** `print` become silently inert until the allowance resets or the server sends a code action. A device that "stopped logging" may just be over allowance |
-| `print` | Truncated at **1023 chars** per message. Multi-argument `print("a", "b")` sends a **separate log message per argument and separator** (3 network posts) — always build one string with `string.format` or `..` |
-| VOUT at boot | **Live at 1.8 V** — see the section above; set 3.3 V before using 3.3 V sensors. `set_vout(0)` switches the port power off entirely |
-| Event handlers during `device.sleep()` | **Fire live** — they interrupt the sleep, run immediately, and the sleep then resumes. Keep handlers short; shared state they touch can change across any `sleep()` call. Note: any other digital/analog operation on a pin silently cancels that pin's event handler |
-| Runtime error | Script **halts**; `codeState` becomes `error` (visible via REST); the Lua error message and line number appear in the Logs tab. No auto-restart — fix and re-push. Wrap risky sections in `pcall` to keep running |
-| Busy loop (no `sleep`) | Does **not** harm the system — the Lua thread runs at lower priority than networking/OTA, and code pushes interrupt Lua via an instruction hook. The cost is power draw, so still always sleep in the main loop |
-| Charger configuration | `set_charger_cv_cc` does **not** persist across reboots — the firmware default (**3.50 V / 32 mA**, minimum-safe) is programmed at every boot. Configure the charger in setup; code restarts from the top on every boot/push, so setup naturally reapplies it |
-| Lua heap | **64 KiB pool** (slightly less usable). Avoid accumulating large tables or long strings; stream to `storage`; process files line-by-line (`storage.read` with `line=`) |
-| Storage capacity | ≈ **48 KiB usable**, **shared with the pushed code file** (same filesystem). No file-count limit. Files survive code pushes and reboots; **everything is erased on un-pair**. Big scripts shrink the space left for data files |
-| I2C/SPI transfers | Max **8191 bytes** per transfer. SPI pin options (`sclk/mosi/miso/cs`) must be given all-or-none |
-| GPS + PSM timing | PSM is requested as TAU 900 s / active 30 s — hence "up to 15 minutes". The network may grant different values |
-| Globals across a code push | In-memory state does not survive a push — code restarts from the top. `storage` files persist |
-
-## Known firmware issues (v2.0.2)
-
-Real defects confirmed in the current firmware — useful when a customer's
-symptom matches. (Tracked for fixing; recheck on newer firmware versions.)
-
-| Symptom | Cause |
-|---|---|
-| Rail measures **0.1 V lower** than set for `set_vout` values 1.9, 2.3, 2.4, 2.8, 2.9, **3.3** (→ 3.2 V) | Float truncation in the voltage→register conversion. Workaround: none from Lua; most 3.3 V sensors tolerate 3.2 V |
-| `set_charger_cv_cc(4.10, …)` or `(4.35, …)` raises "voltage must be…" despite being documented values | Same truncation class. Workaround: use 4.15 or 4.20 (check cell specs) |
-| UART calls do nothing (no error, no data) | `device.uart.*` are unimplemented stubs in current firmware — do not generate UART code |
-| `spi.write_read` behaves wrong (writes on default pins C0–C3 regardless of options) | Shim bug: options are ignored for the write phase. Workaround: use `device.spi.transact` directly, or `spi.write` + `spi.read` |
-| `storage.read` with negative `line` returns `""` for the first line of a file, or when the file ends with `\n` | Backward-scan edge cases. Workaround: track line counts and use positive indices, or avoid trailing newlines in buffer files |
-| `send_data` "succeeds" but nothing arrives, for payloads in the ~960–1074 encoded-byte range | Encode buffer larger than transport buffer; error not propagated. Stay under ~900 bytes |
-| `device.analog.get_input("D0", {})` errors with "number expected" | Passing an options table without `acquisition_time` fails to default. Workaround: omit the table entirely, or always include `acquisition_time` |
-| `battery` percentage shows 0 in Superstack device telemetry | Unit-mix bug in the status uplink calculation (Lua `get_voltage()` is unaffected) |
-| `get_time_date().yearday` is 0-based (Jan 1 → 0) | Missing +1; add one if you need conventional day-of-year |
-| `device.FIRMWARE_VERSION` returns e.g. `"2.0.2"` without the documented `+tweak` suffix | Uses the non-extended version string |
+| Lua version | **5.5**, with 64-bit integers. Libraries: base, coroutine, table, string, math, utf8, and a `json` table. **No `io`, `os`, `debug` or `package`**. `load` accepts text only |
+| `json` | `json.encode(value)`, `json.decode(text)` and `json.null`. Both raise on bad input. Nesting is limited to 16 levels |
+| `print` | Joins its arguments with tabs into **one** log. A log over about 2 KB, or one that arrives while the 2 KB send queue is full, is dropped whole without notice. Logs never block |
+| Runtime error | The code stops. `superstack device list` shows `crashed`, and the log shows `Code crashed: main.lua:<line>: <message>`. It does not restart until new code, a start or restart, or a reboot |
+| Crash at boot | If the code made the device reboot, for example by refusing to stop, it is not started again at the next boot. The log says so |
+| Busy loop | Does not harm the device. Lua runs at the lowest priority, and an instruction hook delivers stops and events. The cost is power, so always sleep in the main loop |
+| Event handlers during `device.sleep()` | Run within about 100 ms, then the sleep resumes. Shared state they touch can change across any `sleep()` |
+| Lua heap | All the RAM the firmware doesn't use, about 160 KB. Still avoid large tables and long strings |
+| Storage | Up to 96 KB of flash, shared by the code bundle and temporary files, in 4 KB blocks |
+| I2C | 7-bit addresses (0 to 127). `write_read` is a write, a stop, then a read, never a repeated start. A transfer is at most 8191 bytes, and a stuck bus times out after 2 s with `success = false` |
+| SPI | Pin options `sclk_pin`, `mosi_pin`, `miso_pin` and `cs_pin` are all or none. At most 8191 bytes per transfer |
+| Digital input | `get_input` and `assign_input_event` pull **down** unless `pull` says otherwise. `set_output` needs a boolean, not `1` or `0` |
+| PSM timing | Requested as a 900 s periodic update and 30 s active time, hence "up to 15 minutes". The network may grant different values |
+| `get_time_date().yearday` | 0-based: January 1 is 0 |
+| State across new code | Globals do not survive. Code starts from the top of `main.lua`, and temporary files are gone |

@@ -3,6 +3,7 @@
   "runtime.version": "Lua 5.5",
   "diagnostics.globals": [
     "device",
+    "json",
     "network",
     "location",
     "storage",

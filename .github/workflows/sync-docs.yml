@@ -23,7 +23,7 @@ jobs:
       - name: Checkout this repo
         uses: actions/checkout@v7
         with:
-          path: claude-plugins
+          path: superstack-agent-plugins
 
       - name: Checkout the docs repo
         uses: actions/checkout@v7
@@ -32,7 +32,7 @@ jobs:
           path: docs
 
       - name: Regenerate reference files
-        working-directory: claude-plugins
+        working-directory: superstack-agent-plugins
         run: python3 scripts/generate-references.py --docs ../docs --write
 
       - name: Open pull request if references changed
@@ -40,7 +40,7 @@ jobs:
         with:
           # PAT or GitHub App token. PRs opened with the default GITHUB_TOKEN never trigger validate.yml
           token: ${{ secrets.SYNC_PR_TOKEN }}
-          path: claude-plugins
+          path: superstack-agent-plugins
           branch: sync-docs-references
           title: "Sync skill references with docs"
           commit-message: "Regenerate skill references from docs"

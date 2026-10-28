@@ -202,11 +202,10 @@ The user's software reaches a device with a fleet key over plain HTTPS.
 4. The device receives the message at its next check-in, through
    `network.assign_message_event` in its Lua (see the `s2-lua` skill).
 
-Full reference: [references/api.md](references/api.md). Command reference:
-[references/cli.md](references/cli.md).
+Full reference: [references/api.md](references/api.md).
 
-Don't invent endpoints, webhooks or a WebSocket API. Use only what the
-references document.
+Don't invent commands, endpoints, webhooks or a WebSocket API. Use only what
+`superstack help` and the references document.
 
 ## Checklist
 

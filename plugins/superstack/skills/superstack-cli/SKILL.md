@@ -11,8 +11,9 @@ description: >-
 license: Apache-2.0
 compatibility: >-
   Needs the `superstack` CLI on PATH and network access. The CLI stores its
-  login in the user's config directory, so a sandboxed agent may need the user
-  to approve running it outside the sandbox.
+  login in `~/.local/state/superstack/key` on Linux, or in the user's config
+  directory on macOS and Windows, so a sandboxed agent may need the user to
+  approve running it outside the sandbox.
 metadata:
   vendor: siliconwitchery
   docs: https://docs.siliconwitchery.com/pages/superstack/cli
@@ -124,7 +125,7 @@ person, so run them like this:
    | `updating` | The device has not received the bundle yet |
    | `starting`, `stopping`, `restarting` | The device has not confirmed the request yet |
    | `running`, `stopped`, `crashed` | What the device last reported about its Lua |
-   | `-` | The device has never checked in |
+   | `-` | The device has code but hasn't reported its state yet |
 
 6. Read the log for `Code started`, or `Code crashed: <error>` with the Lua
    error and line.

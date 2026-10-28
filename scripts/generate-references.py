@@ -5,7 +5,6 @@ Converts the Jekyll/kramdown pages in the siliconwitchery/docs repo into plain
 markdown reference files bundled with the plugin's skills:
 
     pages/superstack/lua.md -> plugins/superstack/skills/s2-lua/references/lua-api.md
-    pages/superstack/cli.md -> plugins/superstack/skills/superstack-cli/references/cli.md
     pages/superstack/api.md -> plugins/superstack/skills/superstack-cli/references/api.md
 
 What it does:
@@ -44,7 +43,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # docs-repo-relative source -> plugin-repo-relative output
 SOURCES = {
     "pages/superstack/lua.md": "plugins/superstack/skills/s2-lua/references/lua-api.md",
-    "pages/superstack/cli.md": "plugins/superstack/skills/superstack-cli/references/cli.md",
     "pages/superstack/api.md": "plugins/superstack/skills/superstack-cli/references/api.md",
 }
 

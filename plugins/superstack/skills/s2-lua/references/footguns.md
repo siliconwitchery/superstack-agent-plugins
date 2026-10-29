@@ -230,9 +230,11 @@ named files.
 
 - `handle:write(data)` replaces the contents. `handle:append(data)` adds to
   them.
-- `handle:read()` with no options returns **line 1 only**. Use
+- `handle:read()` with no options returns the whole file, and raises
+  `not enough memory` when the file does not fit in free memory. Use
   `handle:read{ line = n }` for line `n` (negative counts from the end), or
-  `handle:read{ length = n, offset = o }` for bytes.
+  `handle:read{ length = n, offset = o }` for bytes, which also reads a large
+  file in parts.
 - `handle:close()` deletes the file.
 - **Every temporary file is deleted when the code starts, stops, restarts or
   crashes, when new code arrives, and at reboot.** Nothing survives the run
@@ -241,9 +243,9 @@ named files.
   `there is not enough storage`.
 
 Code files in the bundle are read-only. Load one with `require("name")`, which
-runs `name.lua` and returns its first value. `require` has no cache and runs
-the file again on every call, and the name is a path: `require("lib/sensor")`
-loads `lib/sensor.lua`.
+runs `name.lua` once and returns its first value, and later calls return the
+same value. The name is a path: `require("lib/sensor")` loads
+`lib/sensor.lua`.
 
 ## Retry pattern for a dropped connection
 
@@ -364,5 +366,4 @@ Checked against firmware 3.0.0:
 | SPI | Pin options `sclk_pin`, `mosi_pin`, `miso_pin` and `cs_pin` are all or none. At most 8191 bytes per transfer |
 | Digital input | `get_input` and `assign_input_event` pull **down** unless `pull` says otherwise. `set_output` needs a boolean, not `1` or `0` |
 | PSM timing | Requested as a 900 s periodic update and 30 s active time, hence "up to 15 minutes". The network may grant different values |
-| `get_time_date().yearday` | 0-based: January 1 is 0 |
 | State across new code | Globals do not survive. Code starts from the top of `main.lua`, and temporary files are gone |

@@ -28,8 +28,8 @@ Superstack. These facts shape all code:
 
 - **Code is a bundle.** `main.lua` is the entry point. Other `.lua` files in
   the bundle load with `require("name")`, which runs `name.lua` and returns
-  its first value. `require` has no cache, so it runs the file again on every
-  call. Code files are read-only.
+  its first value. A file runs once, and later calls return the same value.
+  Code files are read-only.
 - Standard libraries: basic, `math`, `string`, `table`, `utf8`, `coroutine`,
   plus a built-in `json` with `json.encode` and `json.decode`. **There is no
   `io`, `os`, `debug` or `package`.** Use `storage.*`, `time.*` and `device.*`
@@ -112,9 +112,8 @@ in [references/footguns.md](references/footguns.md).
    one crashes the program.
 10. **Temporary files die with the run**: `storage.open()` returns a handle to
     a new temporary file, deleted on close and whenever the code starts,
-    stops, crashes or is replaced. `handle:read()` with no options returns
-    **line 1 only**. Nothing on the device survives a restart, so keep durable
-    state on the user's server.
+    stops, crashes or is replaced. Nothing on the device survives a restart,
+    so keep durable state on the user's server.
 11. **Power**: ports boot **live at 1.8 V**, so a 3.3 V sensor on an
     unconfigured port half-works rather than failing cleanly. Call
     `device.power.set_vout(3.3)` in setup. It sets **all** ports at once (1.8 to

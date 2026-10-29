@@ -159,7 +159,7 @@ Three basic functions differ from desktop Lua:
 
 - `require` loads another code file. See [code files](#code-files)
 - `load` accepts only text, not precompiled bytecode
-- `dofile` and `loadfile` cannot open files. Use `require` instead
+- `dofile` and `loadfile` are not available. Use `require` instead
 
 ---
 
@@ -1179,9 +1179,9 @@ require(name)
 
 **Returns**
 
-- **any** - The value the file returns
+- **any** - The value the file returns, or `true` if it returns nothing
 
-**Note:** Each call runs the file again, so call `require` once per file and keep the result. Files can require other files up to 8 levels deep. A deeper `require` raises `require is nested too deeply`, and a missing file raises `module not found`.
+**Note:** A file runs once. Later calls with the same name return the value from the first call without running the file again. Files can require other files up to 8 levels deep. A deeper `require` raises `require is nested too deeply`, and a missing file raises `module not found`.
 
 Unlike desktop Lua, a `.` in the name is not a folder separator, so `require("lib.sensors")` looks for `lib.sensors.lua`. To put `sensors.lua` in a `lib` folder on the device, upload the folder that holds `lib`. See [what an upload sends](/pages/superstack/cli#what-an-upload-sends).
 
@@ -1225,7 +1225,7 @@ network.post("https://example.com/api/readings", readings:read{ length=4096 })
 readings:close()
 ```
 
-**Note:** Every method raises an error once the handle is closed. A handle dropped without closing is closed when the garbage collector reclaims it, so close a file as soon as it is no longer needed to free its space.
+**Note:** If storage is full, `storage.open()` raises `there is not enough storage`. Every method raises an error once the handle is closed. A handle dropped without closing is closed when the garbage collector reclaims it, so close a file as soon as it is no longer needed to free its space.
 
 ---
 
@@ -1288,7 +1288,7 @@ file:append("\nAnd this is a final line of text")
 #### Read data from a temporary file
 
 ```lua
-handle:read{ line=1, length=nil, offset=0 }
+handle:read{ line=nil, length=nil, offset=0 }
 ```
 
 **Optional parameters**
@@ -1299,12 +1299,12 @@ handle:read{ line=1, length=nil, offset=0 }
 
 **Returns**
 
-- **string** - The contents read. A line is returned without its newline. `nil` if the line does not exist
+- **string** - The contents read, or the whole file when neither `line` nor `length` is given. A line is returned without its newline. `nil` if the line does not exist
 
 **Example**
 
 ```lua
--- Read the first line of the file
+-- Read the whole file
 print(file:read())
 
 -- Print the last line from the file
@@ -1313,6 +1313,8 @@ print(file:read{ line=-1 })
 -- Skip the first 8 bytes, then read 16
 print(file:read{ length=16, offset=8 })
 ```
+
+**Note:** Reading more than the free memory holds raises a `not enough memory` error. Read a large file in parts with `length` and `offset`.
 
 ---
 
@@ -1382,7 +1384,7 @@ time.get_time_date({ unix_epoch=nil, timezone="+00:00" })
     - `year` - **integer** - The current year
     - `month` - **integer** - The current month
     - `day` - **integer** - The current day
-    - `yearday` - **integer** - The days since 1 January. `0` on 1 January
+    - `yearday` - **integer** - The day of the year. `1` on 1 January
     - `weekday` - **integer** - The days since Sunday. `0` on Sunday
     - `hour` - **integer** - The current hour
     - `minute` - **integer** - The current minute

@@ -4,8 +4,8 @@ description: >-
   Writes and reviews Lua code for the Silicon Witchery S2 Module (nRF9151-based
   LTE-M and GNSS cellular module) running on Superstack. Covers digital and
   analog IO on PORTA-PORTF, I2C, SPI, UART, PWM, GPS, power and battery,
-  temporary files, REST calls from the device, messages from the user's own
-  project, sleep and timing, and writing I2C sensor drivers from datasheets.
+  REST calls from the device, messages from the user's own project, sleep and
+  timing, and writing I2C sensor drivers from datasheets.
   Use when the user mentions the S2 Module, Superstack device code or Lua,
   wiring sensors to an S2, or IoT code for Silicon Witchery hardware.
 license: Apache-2.0
@@ -32,10 +32,10 @@ Superstack. These facts shape all code:
   Code files are read-only.
 - Standard libraries: basic, `math`, `string`, `table`, `utf8`, `coroutine`,
   plus a built-in `json` with `json.encode` and `json.decode`. **There is no
-  `io`, `os`, `debug` or `package`.** Use `storage.*`, `time.*` and `device.*`
-  instead.
+  `io`, `os`, `debug` or `package`,** so Lua has no file access beyond
+  `require`. Use `time.*` and `device.*` instead.
 - New code **starts from the top of `main.lua`**. So does a restart and a
-  reboot. Globals and temporary files never survive into the next run.
+  reboot. Globals and tables never survive into the next run.
 - There is no debugger. `print()` sends one log, which the user reads with
   `superstack tail`. The loop is: edit, upload, read the log. An upload
   usually lands within seconds, unless PSM is on (see the traps).
@@ -100,7 +100,7 @@ in [references/footguns.md](references/footguns.md).
    it. Use messages for remote configuration instead of uploading new code.
    A message arriving with no handler assigned is discarded.
 7. **User data spends credit** at €1 per MB: every log, every network call and
-   response, every message, and every upload (changed files × target devices).
+   response, every message, and every upload (whole bundle × target devices).
    Batch readings, and strip debug prints before a fleet upload. A fleet with
    no credit sends no logs, and network calls return `no credit`.
 8. **`print` joins its arguments with tabs into one log.** A log over about
@@ -110,10 +110,11 @@ in [references/footguns.md](references/footguns.md).
    always check it. SPI, UART, analog and digital calls raise on failure, so
    wrap risky sections in `pcall`. Handlers cannot yield, and an error inside
    one crashes the program.
-10. **Temporary files die with the run**: `storage.open()` returns a handle to
-    a new temporary file, deleted on close and whenever the code starts,
-    stops, crashes or is replaced. Nothing on the device survives a restart,
-    so keep durable state on the user's server.
+10. **Buffered data dies with the run**: unsent data waits in a Lua table in
+    RAM, which is lost when the code ends, crashes, stops, restarts or is
+    replaced, and when the device restarts. A table that outgrows free memory
+    raises `not enough memory`, so cap it. Keep durable state on the user's
+    server, or on an SPI flash module driven from Lua.
 11. **Power**: ports boot **live at 1.8 V**, so a 3.3 V sensor on an
     unconfigured port half-works rather than failing cleanly. Call
     `device.power.set_vout(3.3)` in setup. It sets **all** ports at once (1.8 to

@@ -6,7 +6,6 @@
     "json",
     "network",
     "location",
-    "storage",
     "time"
   ]
 }

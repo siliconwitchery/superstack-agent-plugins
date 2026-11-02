@@ -11,7 +11,7 @@ One plugin, `superstack`, with two skills:
 
 | Skill            | What it teaches the agent |
 |------------------|---------------------------|
-| `s2-lua`         | Writing Lua for the S2 Module: pins and ports, I2C, SPI, UART, analog, GPS, power, temporary files, network calls, messages from the user's project, and I2C sensor drivers from datasheets, including the traps the docs don't make obvious. |
+| `s2-lua`         | Writing Lua for the S2 Module: pins and ports, I2C, SPI, UART, analog, GPS, power, network calls, messages from the user's project, and I2C sensor drivers from datasheets, including the traps the docs don't make obvious. |
 | `superstack-cli` | Driving the `superstack` CLI: login, fleets, pairing, uploading code, device state, logs, members, fleet keys and credit, plus messaging a device from the user's own project. |
 
 The `superstack-cli` skill needs the [Superstack CLI](https://github.com/siliconwitchery/superstack-cli#install)

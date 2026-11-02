@@ -13,7 +13,7 @@ bricked. Each item is checked against the firmware source or the S2 datasheet.
 - [Messages from the user's project](#messages-from-the-users-project)
 - [Error handling differs per bus](#error-handling-differs-per-bus)
 - [Handlers cannot yield, and their errors crash the code](#handlers-cannot-yield-and-their-errors-crash-the-code)
-- [Temporary files die with the run](#temporary-files-die-with-the-run)
+- [Buffered data dies with the run](#buffered-data-dies-with-the-run)
 - [Retry pattern for a dropped connection](#retry-pattern-for-a-dropped-connection)
 - [Battery charger voltage list has a gap](#battery-charger-voltage-list-has-a-gap)
 - [Ports boot at 1.8 V; VOUT applies to all ports at once](#ports-boot-at-18-v-vout-applies-to-all-ports-at-once)
@@ -109,8 +109,8 @@ Credit costs €1 per MB of user data, counted on the data itself. User data is:
 - every log, which includes every `print()`
 - every network call and its response
 - every message from the user's project
-- every upload, which sends only the files that changed, to every target
-  device
+- every upload, including each `superstack dev` save, which sends the whole
+  bundle to every target device. An upload of identical files sends nothing
 
 Managing the device is free: check-ins, pairing, unpairing, starting,
 stopping, restarting and firmware updates.
@@ -223,24 +223,19 @@ This applies to `device.digital.assign_input_event`,
   `pcall` when they parse input from outside, such as a message.
 - Any other digital or analog use of a pin cancels its input event.
 
-## Temporary files die with the run
+## Buffered data dies with the run
 
-`storage.open()` creates a temporary file and returns its handle. There are no
-named files.
+Lua has no file access beyond `require`, so unsent data waits in a Lua table
+in RAM.
 
-- `handle:write(data)` replaces the contents. `handle:append(data)` adds to
-  them.
-- `handle:read()` with no options returns the whole file, and raises
-  `not enough memory` when the file does not fit in free memory. Use
-  `handle:read{ line = n }` for line `n` (negative counts from the end), or
-  `handle:read{ length = n, offset = o }` for bytes, which also reads a large
-  file in parts.
-- `handle:close()` deletes the file.
-- **Every temporary file is deleted when the code starts, stops, restarts or
-  crashes, when new code arrives, and at reboot.** Nothing survives the run
-  that created it.
-- Storage is shared with the code bundle. A write that does not fit raises
-  `there is not enough storage`.
+- **A table is lost when the code ends, crashes, stops or restarts, when new
+  code arrives, and when the device restarts.** Nothing survives the run that
+  created it.
+- A table that outgrows free memory raises `not enough memory`. Cap every
+  buffer, as the [retry pattern](#retry-pattern-for-a-dropped-connection) does.
+- The Lua heap is larger than the 96 KB of storage, and storage holds only
+  code. For larger or durable buffering, connect an SPI flash module and drive
+  it from Lua with `device.spi.*`.
 
 Code files in the bundle are read-only. Load one with `require("name")`, which
 runs `name.lua` once and returns its first value, and later calls return the
@@ -250,36 +245,40 @@ same value. The name is a path: `require("lib/sensor")` loads
 ## Retry pattern for a dropped connection
 
 Network calls fail with `no network` while the device is out of coverage.
-Keep unsent readings in a temporary file and send them when the connection
-returns. The backlog lives only as long as the run.
+Keep unsent readings in a Lua table and send them when the connection returns.
+The backlog lives only as long as the run. This one keeps the newest 200
+readings and sends each in its own request. A joined backlog must stay within
+the 4096-byte body limit.
 
 ```lua
-local backlog = storage.open()
-local backlog_lines = 0
+local backlog = {}
 
 local function send(reading)
     local line = json.encode(reading)
     local response, err = network.post(URL, line,
         { headers = { ["Content-Type"] = "application/json" } })
+
     if err then
-        backlog:append(line .. "\n")
-        backlog_lines = backlog_lines + 1
+        if #backlog == 200 then
+            table.remove(backlog, 1)
+        end
+
+        table.insert(backlog, line)
         return false
     end
     return true
 end
 
 local function drain()
-    while backlog_lines > 0 do
-        local line = backlog:read{ line = 1 }
-        local response, err = network.post(URL, line,
+    while #backlog > 0 do
+        local response, err = network.post(URL, backlog[1],
             { headers = { ["Content-Type"] = "application/json" } })
+
         if err then
             return
         end
-        local rest = backlog:read{ length = math.maxinteger, offset = #line + 1 }
-        backlog:write(rest or "")
-        backlog_lines = backlog_lines - 1
+
+        table.remove(backlog, 1)
     end
 end
 ```
@@ -361,9 +360,9 @@ Checked against firmware 3.0.0:
 | Busy loop | Does not harm the device. Lua runs at the lowest priority, and an instruction hook delivers stops and events. The cost is power, so always sleep in the main loop |
 | Event handlers during `device.sleep()` | Run within about 100 ms, then the sleep resumes. Shared state they touch can change across any `sleep()` |
 | Lua heap | All the RAM the firmware doesn't use, about 160 KB. Still avoid large tables and long strings |
-| Storage | Up to 96 KB of flash, shared by the code bundle and temporary files, in 4 KB blocks |
+| Storage | Up to 96 KB of flash in 4 KB blocks, holding only code |
 | I2C | 7-bit addresses (0 to 127). `write_read` is a write, a stop, then a read, never a repeated start. A transfer is at most 8191 bytes, and a stuck bus times out after 2 s with `success = false` |
 | SPI | Pin options `sclk_pin`, `mosi_pin`, `miso_pin` and `cs_pin` are all or none. At most 8191 bytes per transfer |
 | Digital input | `get_input` and `assign_input_event` pull **down** unless `pull` says otherwise. `set_output` needs a boolean, not `1` or `0` |
 | PSM timing | Requested as a 900 s periodic update and 30 s active time, hence "up to 15 minutes". The network may grant different values |
-| State across new code | Globals do not survive. Code starts from the top of `main.lua`, and temporary files are gone |
+| State across new code | Globals and tables do not survive. Code starts from the top of `main.lua` |

@@ -1,6 +1,6 @@
 # Complete example programs
 
-Full S2 Module Lua programs. The ground rules: code starts from the top of `main.lua` on new code, a restart or a reboot; there is no `io`, `os` or `package`; temporary files and globals never survive into the next run; data leaves through a REST call to the user's own endpoint, and arrives as a message from the user's project.
+Full S2 Module Lua programs. The ground rules: code starts from the top of `main.lua` on new code, a restart or a reboot; there is no `io`, `os` or `package`; tables and globals never survive into the next run; data leaves through a REST call to the user's own endpoint, and arrives as a message from the user's project.
 
 ## Official examples index (s2-lua-examples repo)
 
@@ -27,13 +27,15 @@ Complete applications:
 
 ## Example A: Battery-powered environmental logger
 
-An SHT45 logger that posts each reading to the user's own endpoint. It keeps readings in a temporary file while the device is out of coverage, sends them when the connection returns, and accepts a new sample interval as a message.
+An SHT45 logger that posts each reading to the user's own endpoint. It keeps the newest 200 readings in a Lua table while the device is out of coverage, sends them when the connection returns, and accepts a new sample interval as a message.
 
 Credit notes:
 
 - Every log, every network call and its response, and every message spend credit. This program prints only on errors and after a backlog drains.
 - Draining sends one request per buffered sample so each keeps its own timestamp. Aggregate instead, such as min, mean and max per hour, if credit matters more than per-sample timing.
-- The backlog lives only as long as the run. New code, a restart or a reboot deletes it.
+- Each body holds one reading, so it stays within the 4096-byte limit. Joining 200 of these readings into one body would not.
+- The backlog lives only as long as the run. The code ending, crashing, stopping or restarting, new code or a reboot deletes it.
+- The cap keeps the backlog from outgrowing free memory, which raises `not enough memory`. When the backlog is full, each new reading drops the oldest.
 
 ```lua
 -- Battery-powered SHT45 environmental logger.
@@ -108,8 +110,7 @@ local function time_is_synced(ts)
     return ts > 1000000000000
 end
 
-local backlog = storage.open()
-local backlog_count = 0
+local backlog = {}
 
 -- Returns true once the server accepted the reading
 local function post(line)
@@ -121,14 +122,12 @@ end
 local function drain_backlog()
     local sent = 0
 
-    while backlog_count > 0 do
-        local line = backlog:read{ line = 1 }
-        if not post(line) then
+    while #backlog > 0 do
+        if not post(backlog[1]) then
             break
         end
 
-        backlog:write(backlog:read{ length = math.maxinteger, offset = #line + 1 })
-        backlog_count = backlog_count - 1
+        table.remove(backlog, 1)
         sent = sent + 1
     end
 
@@ -153,9 +152,12 @@ while true do
 
         drain_backlog()
 
-        if backlog_count > 0 or not post(line) then
-            backlog:append(line .. "\n")
-            backlog_count = backlog_count + 1
+        if #backlog > 0 or not post(line) then
+            if #backlog == 200 then
+                table.remove(backlog, 1)
+            end
+
+            table.insert(backlog, line)
         end
     else
         print("SHT45 read failed (bus error or CRC mismatch)")

@@ -104,7 +104,8 @@ person, so run them like this:
    dotfiles. A file argument lands at the top of the bundle under its own name.
 3. The upload replaces the whole bundle. The server refuses it when:
    - `main.lua` is missing.
-   - A path is `tmp` or starts with `tmp/`.
+   - A path is `.bundle` or starts with `.bundle/`, a name the device keeps for
+     itself.
    - A path is longer than 255 bytes.
    - The bundle does not fit the device's storage.
    - The fleet has no credit.
@@ -134,8 +135,8 @@ A fleet upload reaches the devices paired with the fleet at that moment. A
 device paired later needs its own upload.
 
 `superstack dev <imei|fleet_id> <directory>` uploads on every change and
-follows the log. Use it when the user is working interactively. It runs until
-stopped.
+follows the log. Each save spends credit for the bundle's full size. Use it
+when the user is working interactively. It runs until stopped.
 
 `superstack download <imei> <directory>` fetches the bundle the server holds
 for a device. Nothing is read back from the device itself.
@@ -164,8 +165,9 @@ device. Stop is the remote kill switch. It always works, even without credit.
   responses.
 - Managing a device is free: check-ins, pairing, unpairing, starting,
   stopping, restarting and firmware updates.
-- An upload sends only the files that changed, but it sends them to every
-  target device. Estimate the cost before uploading to a large fleet.
+- An upload sends the whole bundle to every target device, not only the files
+  that changed. An upload of identical files sends nothing. Estimate the cost
+  before uploading to a large fleet.
 - A fleet with no credit refuses uploads and messages, sends no logs, and its
   network calls from Lua return `no credit`. The code keeps running.
 - `superstack account balance [fleet_id]` shows the credit left.

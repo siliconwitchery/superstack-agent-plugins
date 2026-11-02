@@ -37,7 +37,6 @@ Complete, ready-to-run code is in the example repository. If you write code with
   - [Sleep](#sleep)
   - [Power](#power)
   - [Code files](#code-files)
-  - [Temporary files](#temporary-files)
   - [Timekeeping](#timekeeping)
   - [Device information](#device-information)
   - [JSON](#json)
@@ -88,11 +87,6 @@ Every function and constant on this page, in page order. Each links to its full 
 | [`device.power.battery.get_charging_status()`](#get-the-battery-charging-status) | Get the battery charging status |
 | [`device.power.set_vout()`](#set-the-io-voltage-for-all-ports) | Set the IO voltage for all ports |
 | [`require()`](#run-another-code-file) | Run another code file |
-| [`storage.open()`](#open-a-temporary-file) | Open a temporary file |
-| [`handle:write()`](#write-data-to-a-temporary-file) | Write data to a temporary file |
-| [`handle:append()`](#append-data-to-a-temporary-file) | Append data to a temporary file |
-| [`handle:read()`](#read-data-from-a-temporary-file) | Read data from a temporary file |
-| [`handle:close()`](#close-a-temporary-file) | Close a temporary file |
 | [`time.get_unix_time()`](#get-the-current-unix-timestamp) | Get the current Unix timestamp |
 | [`time.get_time_date()`](#get-the-current-time-and-date) | Get the current time and date |
 | [`device.HARDWARE_VERSION`](#hardware-version-constant) | Hardware version constant |
@@ -148,9 +142,9 @@ The device runs **Lua 5.5**. Most of the standard Lua libraries that you would f
 - ✅ [UTF-8 support](https://www.lua.org/manual/5.5/manual.html#6.5)
 - ✅ [Coroutine manipulation](https://www.lua.org/manual/5.5/manual.html#6.2)
 
-The remaining standard libraries are not included, as they are superseded by similar functionality provided by the device specific libraries:
+The remaining standard libraries are not included:
 
-- ❎ File IO functions - Replaced by the [temporary files](#temporary-files) library
+- ❎ File IO functions - Lua has no file access beyond `require`
 - ❎ Operating system functions - Replaced by the [timekeeping](#timekeeping) and [device information](#device-information) libraries
 - ❎ Debug library
 - ❎ Package library - `require` loads [code files](#code-files) without it
@@ -851,6 +845,29 @@ if network.connected() then
 end
 ```
 
+**Example**
+
+```lua
+-- Keep the newest 200 readings in RAM while the network is down
+local readings = {}
+
+while not network.connected() do
+    if #readings == 200 then
+        table.remove(readings, 1)
+    end
+
+    table.insert(readings, device.power.battery.get_voltage())
+    device.sleep(60)
+end
+
+-- Send the buffered readings once the network returns
+if #readings > 0 then
+    network.post("https://example.com/api/readings", table.concat(readings, "\n"))
+end
+```
+
+**Note:** A Lua table is held in RAM, so buffered readings are lost when the code ends, crashes, stops or restarts, or when the S2 restarts. A table that outgrows the free memory raises `not enough memory`. The example keeps 200 readings so that they fit in one 4096-byte request body.
+
 ---
 
 #### Set low power mode
@@ -1192,150 +1209,6 @@ Unlike desktop Lua, a `.` in the name is not a folder separator, so `require("li
 local sensors = require("sensors")
 print(sensors.read_temperature())
 ```
-
----
-
-### Temporary files
-
-**Note:** A temporary file is created by `storage.open()` and reached only through the handle it returns. Closing the handle deletes the file, and every temporary file is deleted when the code starts, ends, crashes, stops or restarts. Temporary files share storage with the code files in the bundle. The storage is **96KB**, and the file system uses part of it.
-
-#### Open a temporary file
-
-```lua
-storage.open()
-```
-
-**Returns**
-
-- **handle** - A new, empty temporary file. Call `write`, `append`, `read` and `close` on it using the `:` syntax
-
-**Example**
-
-```lua
--- Buffer readings in a temporary file while the network is down
-local readings = storage.open()
-
-while not network.connected() do
-    readings:append(device.power.battery.get_voltage() .. "\n")
-    device.sleep(60)
-end
-
--- Send the buffered readings once the network returns
-network.post("https://example.com/api/readings", readings:read{ length=4096 })
-readings:close()
-```
-
-**Note:** If storage is full, `storage.open()` raises `there is not enough storage`. Every method raises an error once the handle is closed. A handle dropped without closing is closed when the garbage collector reclaims it, so close a file as soon as it is no longer needed to free its space.
-
----
-
-#### Write data to a temporary file
-
-```lua
-handle:write(data)
-```
-
-**Parameters**
-
-- `data` - **string** - The data to write. Replaces the whole content of the file
-
-**Returns**
-
-- **nil**
-
-**Example**
-
-```lua
--- Write data to the file, then replace it
-local file = storage.open()
-file:write("Hello world")
-file:write("Goodbye world")
-
--- Prints "Goodbye world"
-print(file:read())
-```
-
-**Note:** If the data does not fit in the remaining space, the write raises an error and leaves the file unchanged.
-
----
-
-#### Append data to a temporary file
-
-```lua
-handle:append(data)
-```
-
-**Parameters**
-
-- `data` - **string** - The data to append to the end of the file
-
-**Returns**
-
-- **nil**
-
-**Example**
-
-```lua
--- Append more data to the file
-file:append("\nThis is another line of text")
-file:append("\nAnd this is a final line of text")
-```
-
-**Note:** If the data does not fit in the remaining space, the append raises an error and leaves the file unchanged.
-
----
-
-#### Read data from a temporary file
-
-```lua
-handle:read{ line=nil, length=nil, offset=0 }
-```
-
-**Optional parameters**
-
-- `line` - **integer** - The line index to return. `1` is the first line, `2` the second, etc. Negative values index from the end: `-1` is the last line, `-2` the second to last, etc. Cannot be `0`, and cannot be combined with `length` or `offset`
-- `length` - **integer** - The number of bytes to read. Cannot be used with `line`. If longer than the file, a shorter result is returned
-- `offset` - **integer** - The number of bytes to skip before reading. `0` reads from the start. Requires `length`
-
-**Returns**
-
-- **string** - The contents read, or the whole file when neither `line` nor `length` is given. A line is returned without its newline. `nil` if the line does not exist
-
-**Example**
-
-```lua
--- Read the whole file
-print(file:read())
-
--- Print the last line from the file
-print(file:read{ line=-1 })
-
--- Skip the first 8 bytes, then read 16
-print(file:read{ length=16, offset=8 })
-```
-
-**Note:** Reading more than the free memory holds raises a `not enough memory` error. Read a large file in parts with `length` and `offset`.
-
----
-
-#### Close a temporary file
-
-```lua
-handle:close()
-```
-
-**Returns**
-
-- **nil**
-
-**Example**
-
-```lua
--- Close the file. This deletes it and frees its space
-file:close()
-```
-
-**Note:** Any use of the handle after closing raises an error. Use `pcall` if the code cannot guarantee the handle is still open.
 
 ---
 

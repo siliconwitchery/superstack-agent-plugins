@@ -1214,6 +1214,8 @@ print(sensors.read_temperature())
 
 ### Timekeeping
 
+The time is not known until the device first checks in to Superstack, which sets its clock to within 2 seconds and corrects it whenever it drifts further. While [location](#location-gps) is enabled, each GPS fix also sets the clock, to the millisecond of the fix.
+
 #### Get the current Unix timestamp
 
 ```lua

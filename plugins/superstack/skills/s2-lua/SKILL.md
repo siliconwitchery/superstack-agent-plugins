@@ -3,9 +3,10 @@ name: s2-lua
 description: >-
   Writes and reviews Lua code for the Silicon Witchery S2 Module (nRF9151-based
   LTE-M and GNSS cellular module) running on Superstack. Covers digital and
-  analog IO on PORTA-PORTF, I2C, SPI, UART, PWM, GPS, power and battery,
-  REST calls from the device, messages from the user's own project, sleep and
-  timing, and writing I2C sensor drivers from datasheets.
+  analog IO on PORTA-PORTF, I2C, SPI, UART, PWM, PDM microphones, WS2812
+  LEDs, GPS, power and battery, REST calls from the device, messages from the
+  user's own project, sleep and timing, and writing I2C sensor drivers from
+  datasheets.
   Use when the user mentions the S2 Module, Superstack device code or Lua,
   wiring sensors to an S2, or IoT code for Silicon Witchery hardware.
 license: Apache-2.0
@@ -107,9 +108,9 @@ in [references/footguns.md](references/footguns.md).
    2 KB, or one that arrives while the send queue is full, is dropped without
    notice. Log lightly.
 9. **Error models differ**: I2C calls return `{ success = boolean, ... }`, so
-   always check it. SPI, UART, analog and digital calls raise on failure, so
-   wrap risky sections in `pcall`. Handlers cannot yield, and an error inside
-   one crashes the program.
+   always check it. SPI, UART, PDM, WS2812, analog and digital calls raise on
+   failure, so wrap risky sections in `pcall`. Handlers cannot yield, and an
+   error inside one crashes the program.
 10. **Buffered data dies with the run**: unsent data waits in a Lua table in
     RAM, which is lost when the code ends, crashes, stops, restarts or is
     replaced, and when the device restarts. A table that outgrows free memory

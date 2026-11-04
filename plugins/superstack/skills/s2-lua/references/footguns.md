@@ -189,7 +189,7 @@ Use this for remote configuration instead of uploading new code.
 | API | Failure surface |
 |---|---|
 | `device.i2c.read/write/write_read` | returns a table with a `success` boolean. **Always check it** |
-| `device.spi.*`, `device.uart.*`, `device.analog.*`, `device.digital.*` | no success flag. Bad arguments and failures raise |
+| `device.spi.*`, `device.uart.*`, `device.pdm.*`, `device.ws2812.*`, `device.analog.*`, `device.digital.*` | no success flag. Bad arguments and failures raise |
 | `device.i2c.scan` | returns nil. Each result line is a separate log |
 | network calls | return `response, error`. Bad URLs, headers and oversized bodies raise |
 
@@ -213,8 +213,8 @@ end
 ## Handlers cannot yield, and their errors crash the code
 
 This applies to `device.digital.assign_input_event`,
-`device.uart.assign_read_event`, network callbacks and
-`network.assign_message_event`:
+`device.uart.assign_read_event`, `device.pdm.assign_read_event`, network
+callbacks and `network.assign_message_event`:
 
 - A handler runs between instructions of the main code and during
   `device.sleep`, then the main code resumes.

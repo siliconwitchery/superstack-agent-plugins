@@ -29,6 +29,8 @@ Complete, ready-to-run code is in the example repository. If you write code with
   - [I2C communication](#i2c-communication)
   - [SPI communication](#spi-communication)
   - [UART communication](#uart-communication)
+  - [Microphone (PDM)](#microphone-pdm)
+  - [Addressable LEDs (WS2812)](#addressable-leds-ws2812)
 - [Networking libraries](#networking-libraries)
   - [Networking (LTE)](#networking-lte)
   - [Location (GPS)](#location-gps)
@@ -67,6 +69,10 @@ Every function and constant on this page, in page order. Each links to its full 
 | [`device.uart.write()`](#write-uart-data) | Write UART data |
 | [`device.uart.assign_read_event()`](#assign-an-event-handler-for-uart-data) | Assign an event handler for UART data |
 | [`device.uart.unassign_read_event()`](#disable-the-uart-read-event-handler) | Disable the UART read event handler |
+| [`device.pdm.read()`](#record-audio-from-a-pdm-microphone) | Record audio from a PDM microphone |
+| [`device.pdm.assign_read_event()`](#assign-an-event-handler-for-microphone-audio) | Assign an event handler for microphone audio |
+| [`device.pdm.unassign_read_event()`](#disable-the-microphone-read-event-handler) | Disable the microphone read event handler |
+| [`device.ws2812.write()`](#set-the-colors-of-addressable-leds) | Set the colors of addressable LEDs |
 | [`network.get()`](#send-a-get-or-delete-request-to-a-web-service) | Send a GET or DELETE request to a web service |
 | [`network.delete()`](#send-a-get-or-delete-request-to-a-web-service) | Send a GET or DELETE request to a web service |
 | [`network.post()`](#send-a-post-put-or-patch-request-to-a-web-service) | Send a POST, PUT or PATCH request to a web service |
@@ -686,6 +692,155 @@ device.uart.unassign_read_event()
 ```lua
 -- Stop receiving UART data
 device.uart.unassign_read_event()
+```
+
+---
+
+### Microphone (PDM)
+
+#### Record audio from a PDM microphone
+
+```lua
+device.pdm.read(samples, { port="PORTA", channel="LEFT", sample_rate=16000, gain=0 })
+```
+
+**Parameters**
+
+- `samples` - **integer** - The number of samples to record from each channel. E.g. `16000` for one second at the default sample rate
+
+**Optional parameters**
+
+- `port` - **string** - The 4-pin port the microphone is connected to. Can be `"PORTA"`, `"PORTB"`, `"PORTE"`, or `"PORTF"`. Defaults to `"PORTA"`. The clock is on pin 4 and the data on pin 3, the pins that carry SCL and SDA in the [Stemma QT](https://learn.adafruit.com/introducing-adafruit-stemma-qt/what-is-stemma)/[Qwiic](https://www.sparkfun.com/qwiic) pinout. Cannot be used with `clk_pin` and `data_pin`
+- `clk_pin` - **string** - The pin name for the clock. E.g. `"C0"`. Must be specified with `data_pin`
+- `data_pin` - **string** - The pin name for the data. E.g. `"C1"`. Must be specified with `clk_pin`
+- `channel` - **string** - The channel to record. Can be `"LEFT"`, `"RIGHT"`, or `"STEREO"`. A PDM microphone sends the left or the right channel, which a pin or jumper on the microphone selects. `"STEREO"` records two microphones that share the clock and data pins, one set to each channel. Defaults to `"LEFT"`
+- `sample_rate` - **integer** - The samples per second. Can be `12500`, `16000`, or `20000`. Defaults to `16000`
+- `gain` - **number** - The gain in dB. From `-20` to `20` in steps of `0.5`. Defaults to `0`
+
+**Returns**
+
+- **string** - The samples, each a signed 16-bit little-endian integer. Read one with `string.unpack("<i2", data, position)`. In stereo, left and right samples alternate, starting with the left. Returns once every sample is recorded
+
+**Note:** Each read starts the microphone, which sends nothing for its start-up time, often tens of milliseconds. The S2 also filters out the steady level of the audio, and this filter takes about a second to settle after the start. Until it does, the audio sits on an offset that fades. The offset can't be heard, but code that measures the level in that first second includes it, and at a high gain the first samples can reach the limit of the range. To record without the start-up, keep a [read event](#assign-an-event-handler-for-microphone-audio) running.
+
+A read holds all its samples in memory, so one read can hold about 4 seconds of audio from one channel at 16000 samples per second. A larger read raises `not enough memory`. Only one read or read event can use the microphone at a time. Another raises `the microphone is already being read`.
+
+**Example**
+
+```lua
+-- Record two seconds, and log the loudest sample once the start-up has settled
+local data = device.pdm.read(32000)
+local loudest = 0
+
+for position = 32001, #data, 2 do
+    loudest = math.max(loudest, math.abs(string.unpack("<i2", data, position)))
+end
+
+print("Loudest sample: " .. loudest)
+```
+
+---
+
+#### Assign an event handler for microphone audio
+
+```lua
+device.pdm.assign_read_event(samples, handler, { port="PORTA", channel="LEFT", sample_rate=16000, gain=0 })
+```
+
+**Parameters**
+
+- `samples` - **integer** - The number of samples from each channel in every block. From `1` to `32767`, or `16383` in stereo
+- `handler` - **function** - The function to call with each block. Called with one argument:
+    - `data` - **string** - The block's samples, in the same form that [`device.pdm.read()`](#record-audio-from-a-pdm-microphone) returns
+
+**Optional parameters**
+
+- `port`, `clk_pin`, `data_pin`, `channel`, `sample_rate`, and `gain` - The same options as [`device.pdm.read()`](#record-audio-from-a-pdm-microphone)
+
+**Returns**
+
+- **nil**
+
+**Note:** The microphone records without a break until the event is unassigned or the code ends, so each block follows on from the last. The first second of blocks carries the start-up that [`device.pdm.read()`](#record-audio-from-a-pdm-microphone) describes. Only one PDM read event can be assigned at a time. Assigning another replaces it. If the code falls more than three blocks behind, the blocks waiting for it are dropped.
+
+**Example**
+
+```lua
+-- Keep the most recent second of audio, ready for the moment it's needed
+local recent = {}
+
+device.pdm.assign_read_event(1600, function(block)
+    table.insert(recent, block)
+
+    if #recent > 10 then
+        table.remove(recent, 1)
+    end
+end)
+
+-- Later, such as when a button is pressed
+local audio = table.concat(recent)
+```
+
+---
+
+#### Disable the microphone read event handler
+
+```lua
+device.pdm.unassign_read_event()
+```
+
+**Returns**
+
+- **nil**
+
+**Example**
+
+```lua
+-- Stop recording
+device.pdm.unassign_read_event()
+```
+
+---
+
+### Addressable LEDs (WS2812)
+
+#### Set the colors of addressable LEDs
+
+```lua
+device.ws2812.write(pin, colors, { order="GRB", frequency=800000 })
+```
+
+**Parameters**
+
+- `pin` - **string** - The pin name connected to the data input of the first LED. E.g. `"B0"`
+- `colors` - **table** - One color for each LED, in the order the LEDs are chained. Each color is a table of red, green and blue values, then white when `order` includes `W`, each an integer from `0` to `255`. E.g. `{ { 255, 0, 0 }, { 0, 0, 255 } }`
+
+**Optional parameters**
+
+- `order` - **string** - The order in which the LEDs take each color's values, as the letters `R`, `G`, `B`, and optionally `W`, each once. E.g. `"GRB"` for most WS2812 and SK6812 LEDs, or `"GRBW"` for most RGBW LEDs. Check the LEDs' datasheet. Defaults to `"GRB"`
+- `frequency` - **integer** - The data rate in Hz. Can be `800000`, or `400000` for LEDs such as the WS2811 in its slow mode. Defaults to `800000`
+
+**Returns**
+
+- **nil** - Returns once every color is sent
+
+**Note:** One write can set up to 1365 LEDs, or 1023 when `order` includes `W`. The LEDs keep their colors until the next write. A write uses one of the four PWM instances while it sends. When [PWM](#output-a-pwm-signal-on-a-pin) uses all four, the pin that started PWM first stops.
+
+The data swings to the IO voltage of the port, which starts at 1.8V, so call [`device.power.set_vout(3.3)`](#set-the-io-voltage-for-all-ports) first. PORTA to PORTC share 100mA, as do PORTD to PORTF, and a single LED at full brightness can draw tens of milliamps. Power more LEDs than that allows from a separate supply.
+
+**Example**
+
+```lua
+-- Light a ring of 12 RGBW LEDs dim red
+device.power.set_vout(3.3)
+
+local colors = {}
+
+for led = 1, 12 do
+    colors[led] = { 32, 0, 0, 0 }
+end
+
+device.ws2812.write("B0", colors, { order="GRBW" })
 ```
 
 ---
